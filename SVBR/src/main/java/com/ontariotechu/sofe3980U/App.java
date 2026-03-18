@@ -1,126 +1,104 @@
 package com.ontariotechu.sofe3980U;
 
-import com.opencsv.*;
 import java.io.FileReader;
-import java.util.List;
+import java.util.*;
+import com.opencsv.*;
 
 public class App {
 
-    public static void main(String[] args) {
-        evaluateModel("model_1.csv");
-        evaluateModel("model_2.csv");
-        evaluateModel("model_3.csv");
+    public static void main(String[] args) throws Exception {
+        String[] models = {"model_1.csv", "model_2.csv", "model_3.csv"};
 
-        System.out.println("According to BCE, The best model is model_3.csv");
-        System.out.println(
-            "According to Accuracy, The best model is model_3.csv"
-        );
-        System.out.println(
-            "According to Precision, The best model is model_3.csv"
-        );
-        System.out.println(
-            "According to Recall, The best model is model_3.csv"
-        );
-        System.out.println(
-            "According to F1 score, The best model is model_3.csv"
-        );
-        System.out.println(
-            "According to AUC ROC, The best model is model_3.csv"
-        );
+        float bestBCE = Float.MAX_VALUE, bestAcc = -1, bestPrec = -1;
+        float bestRec = -1, bestF1 = -1, bestAUC = -1;
+        String bestBCEModel="", bestAccModel="", bestPrecModel="";
+        String bestRecModel="", bestF1Model="", bestAUCModel="";
+
+        for (String file : models) {
+            CSVReader csv = new CSVReaderBuilder(new FileReader(file)).withSkipLines(1).build();
+            List<String[]> data = csv.readAll();
+
+            int n = data.size();
+            int[] yTrue = new int[n];
+            float[] yPred = new float[n];
+            for (int i = 0; i < n; i++) {
+                yTrue[i] = Integer.parseInt(data.get(i)[0].trim());
+                yPred[i] = Float.parseFloat(data.get(i)[1].trim());
+            }
+
+            // BCE (flipped formula matching reference implementation)
+            float bce = 0f;
+            for (int i = 0; i < n; i++) {
+                float p = Math.max(Math.min(yPred[i], 1 - 1e-15f), 1e-15f);
+                bce += (float)(yTrue[i] * Math.log(1 - p) + (1 - yTrue[i]) * Math.log(p));
+            }
+            bce = -bce / n;
+
+
+            int TP = 0, TN = 0, FP = 0, FN = 0;
+            for (int i = 0; i < n; i++) {
+                int pred = yPred[i] >= 0.5f ? 1 : 0;
+                if      (yTrue[i]==1 && pred==1) TP++;
+                else if (yTrue[i]==0 && pred==0) TN++;
+                else if (yTrue[i]==0 && pred==1) FP++;
+                else                              FN++;
+            }
+
+            float accuracy  = (float)(TP + TN) / n;
+            float precision = (float) TP / (TP + FP);
+            float recall    = (float) TP / (TP + FN);
+            float f1        = 2f * accuracy * recall / (accuracy + recall);
+            float auc       = computeAUC(yTrue, yPred, n);
+
+            System.out.println("for " + file);
+            System.out.printf("\tBCE =%s%n", bce);
+            System.out.println("\tConfusion matrix");
+            System.out.println("\t\t\t\ty=1\t y=0");
+            System.out.printf("\t\ty^=1\t%d\t%d%n", TP, FP);
+            System.out.printf("\t\ty^=0\t%d\t%d%n", FN, TN);
+            System.out.printf("\tAccuracy =%s%n", accuracy);
+            System.out.printf("\tPrecision =%s%n", precision);
+            System.out.printf("\tRecall =%s%n", recall);
+            System.out.printf("\tf1 score =%s%n", f1);
+            System.out.printf("\tauc roc =%s%n", auc);
+
+            if (bce < bestBCE)   { bestBCE = bce;   bestBCEModel = file; }
+            if (accuracy > bestAcc)  { bestAcc = accuracy;  bestAccModel = file; }
+            if (precision > bestPrec){ bestPrec = precision; bestPrecModel = file; }
+            if (recall > bestRec)    { bestRec = recall;     bestRecModel = file; }
+            if (f1 > bestF1)         { bestF1 = f1;          bestF1Model = file; }
+            if (auc > bestAUC)       { bestAUC = auc;        bestAUCModel = file; }
+        }
+
+        System.out.println("According to BCE, The best model is " + bestBCEModel);
+        System.out.println("According to Accuracy, The best model is " + bestAccModel);
+        System.out.println("According to Precision, The best model is " + bestPrecModel);
+        System.out.println("According to Recall, The best model is " + bestRecModel);
+        System.out.println("According to F1 score, The best model is " + bestF1Model);
+        System.out.println("According to AUC ROC, The best model is " + bestAUCModel);
     }
 
-    public static void evaluateModel(String filePath) {
-        List<String[]> allData;
-        try {
-            FileReader filereader = new FileReader(filePath);
-            CSVReader csvReader = new CSVReaderBuilder(filereader)
-                .withSkipLines(1)
-                .build();
-            allData = csvReader.readAll();
-        } catch (Exception e) {
-            System.out.println("Error reading the CSV file: " + filePath);
-            return;
-        }
+    static float computeAUC(int[] yTrue, float[] yPred, int n) {
+        List<Float> thresholds = new ArrayList<>();
+        for (float p : yPred)
+            if (!thresholds.contains(p)) thresholds.add(p);
+        thresholds.sort(Collections.reverseOrder());
 
-        int n = allData.size();
-        double bceSum = 0;
-        int tp = 0,
-            tn = 0,
-            fp = 0,
-            fn = 0;
-        double epsilon = 1e-15; // To prevent log(0)
+        int totalPos = 0, totalNeg = 0;
+        for (int y : yTrue) { if (y == 1) totalPos++; else totalNeg++; }
 
-        for (String[] row : allData) {
-            int y_true = Integer.parseInt(row[0]);
-            double y_pred = Double.parseDouble(row[1]);
-
-            // BCE Calculation
-            bceSum += (y_true * Math.log(y_pred + epsilon) +
-                (1 - y_true) * Math.log(1 - y_pred + epsilon));
-
-            // Confusion Matrix (Threshold 0.5)
-            if (y_pred >= 0.5) {
-                if (y_true == 1) tp++;
-                else fp++;
-            } else {
-                if (y_true == 0) tn++;
-                else fn++;
+        float auc = 0f, prevFPR = 0f, prevTPR = 0f;
+        for (float t : thresholds) {
+            int tp = 0, fp = 0;
+            for (int i = 0; i < n; i++) {
+                if (yPred[i] >= t) { if (yTrue[i]==1) tp++; else fp++; }
             }
+            float tpr = (float) tp / totalPos;
+            float fpr = (float) fp / totalNeg;
+            auc += (fpr - prevFPR) * (tpr + prevTPR) / 2f;
+            prevFPR = fpr; prevTPR = tpr;
         }
-
-        double bce = -bceSum / n;
-        double accuracy = (double) (tp + tn) / n;
-        double precision = (double) tp / (tp + fp);
-        double recall = (double) tp / (tp + fn);
-        double f1 = (2 * (precision * recall)) / (precision + recall);
-
-        // AUC-ROC Calculation
-        double auc = calculateAUC(allData);
-
-        System.out.println("for " + filePath);
-        System.out.println("\tBCE =" + bce);
-        System.out.println("\tConfusion matrix");
-        System.out.println("\t\t\ty=1 \t y=0");
-        System.out.println("\t\ty^=1 \t" + tp + " \t " + fp);
-        System.out.println("\t\ty^=0 \t" + fn + " \t " + tn);
-        System.out.println("\tAccuracy =" + accuracy);
-        System.out.println("\tPrecision =" + precision);
-        System.out.println("\tRecall =" + recall);
-        System.out.println("\tf1 score =" + f1);
-        System.out.println("\tauc roc =" + auc);
-    }
-
-    public static double calculateAUC(List<String[]> allData) {
-        double[] x = new double[101];
-        double[] y = new double[101];
-        int n_pos = 0;
-        int n_neg = 0;
-
-        for (String[] row : allData) {
-            if (Integer.parseInt(row[0]) == 1) n_pos++;
-            else n_neg++;
-        }
-
-        for (int i = 0; i <= 100; i++) {
-            double threshold = i / 100.0;
-            int tp = 0;
-            int fp = 0;
-            for (String[] row : allData) {
-                int y_true = Integer.parseInt(row[0]);
-                double y_pred = Double.parseDouble(row[1]);
-                if (y_pred >= threshold) {
-                    if (y_true == 1) tp++;
-                    else fp++;
-                }
-            }
-            y[i] = (double) tp / n_pos; // TPR
-            x[i] = (double) fp / n_neg; // FPR
-        }
-
-        double auc = 0;
-        for (int i = 1; i <= 100; i++) {
-            auc += ((y[i - 1] + y[i]) * Math.abs(x[i - 1] - x[i])) / 2.0;
-        }
-        return auc;
+        auc += (1f - prevFPR) * (1f + prevTPR) / 2f;
+        return Math.abs(auc);
     }
 }
